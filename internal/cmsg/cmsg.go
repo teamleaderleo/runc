@@ -33,10 +33,10 @@ import (
 // larger than this value.
 const MaxNameLen = 4096
 
-// oobSpace is the size of the oob slice required to store a single FD. Note
-// that unix.UnixRights appears to make the assumption that fd is always int32,
-// so sizeof(fd) = 4.
-var oobSpace = unix.CmsgSpace(4)
+// oobSpace is large enough for one FD and the optional SCM_CREDENTIALS message
+// attached by Linux when the receiving socket has SO_PASSCRED enabled. Note
+// that unix.UnixRights assumes fd is int32, so sizeof(fd) = 4.
+var oobSpace = unix.CmsgSpace(4) + unix.CmsgSpace(unix.SizeofUcred)
 
 // RecvFile waits for a file descriptor to be sent over the given AF_UNIX
 // socket. The file name of the remote file descriptor will be recreated
@@ -47,12 +47,12 @@ func RecvFile(socket *os.File) (_ *os.File, Err error) {
 
 	sockfd := socket.Fd()
 	var (
-		n, oobn int
-		err     error
+		n, oobn, flags int
+		err            error
 	)
 
 	for {
-		n, oobn, _, _, err = unix.Recvmsg(int(sockfd), name, oob, unix.MSG_CMSG_CLOEXEC)
+		n, oobn, flags, _, err = unix.Recvmsg(int(sockfd), name, oob, unix.MSG_CMSG_CLOEXEC)
 		if err != unix.EINTR {
 			break
 		}
@@ -61,8 +61,11 @@ func RecvFile(socket *os.File) (_ *os.File, Err error) {
 	if err != nil {
 		return nil, os.NewSyscallError("recvmsg", err)
 	}
-	if n >= MaxNameLen || oobn != oobSpace {
+	if n >= MaxNameLen || oobn == 0 {
 		return nil, fmt.Errorf("recvfile: incorrect number of bytes read (n=%d oobn=%d)", n, oobn)
+	}
+	if flags&unix.MSG_CTRUNC != 0 {
+		return nil, fmt.Errorf("recvfile: control message truncated")
 	}
 	// Truncate.
 	name = name[:n]
@@ -88,15 +91,25 @@ func RecvFile(socket *os.File) (_ *os.File, Err error) {
 			_ = unix.Close(fd)
 		}
 	}()
-	var lastErr error
+	var (
+		lastErr        error
+		rightsMessages int
+	)
 	for _, scm := range scms {
-		if scm.Header.Type == unix.SCM_RIGHTS {
+		switch {
+		case scm.Header.Level == unix.SOL_SOCKET && scm.Header.Type == unix.SCM_RIGHTS:
+			rightsMessages++
 			scmFds, err := unix.ParseUnixRights(&scm)
 			if err != nil {
 				lastErr = err
 			} else {
 				fds = append(fds, scmFds...)
 			}
+		case scm.Header.Level == unix.SOL_SOCKET && scm.Header.Type == unix.SCM_CREDENTIALS:
+			// SO_PASSCRED adds this alongside SCM_RIGHTS. The credentials are
+			// not part of RecvFile's return contract.
+		default:
+			lastErr = fmt.Errorf("recvfd: unexpected control message level=%d type=%d", scm.Header.Level, scm.Header.Type)
 		}
 	}
 	if lastErr != nil {
@@ -105,8 +118,8 @@ func RecvFile(socket *os.File) (_ *os.File, Err error) {
 
 	// We do this after collecting the fds to make sure we close them all when
 	// returning an error here.
-	if len(scms) != 1 {
-		return nil, fmt.Errorf("recvfd: number of SCMs is not 1: %d", len(scms))
+	if rightsMessages != 1 {
+		return nil, fmt.Errorf("recvfd: number of SCM_RIGHTS messages is not 1: %d", rightsMessages)
 	}
 	if len(fds) != 1 {
 		return nil, fmt.Errorf("recvfd: number of fds is not 1: %d", len(fds))
