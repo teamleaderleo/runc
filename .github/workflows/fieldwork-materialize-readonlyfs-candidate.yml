@@ -1,0 +1,126 @@
+name: Materialize Fieldwork readonlyfs candidate
+
+on:
+  push:
+    branches:
+      - fieldwork/readonlyfs-validator-candidate
+    paths:
+      - ".github/workflows/fieldwork-materialize-readonlyfs-candidate.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  materialize-candidate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out candidate branch
+        uses: actions/checkout@v4
+        with:
+          ref: fieldwork/readonlyfs-validator-candidate
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Apply exact candidate source and controls
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          validator = Path("libcontainer/configs/validate/validator.go")
+          text = validator.read_text()
+          needle = "func security(config *configs.Config) error {\n\t// restrict sys without mount namespace\n"
+          replacement = (
+              "func security(config *configs.Config) error {\n"
+              "\tif config.Readonlyfs && !config.Namespaces.Contains(configs.NEWNS) {\n"
+              "\t\treturn errors.New(\"unable to make rootfs read-only without a configured MNT namespace\")\n"
+              "\t}\n"
+              "\t// restrict sys without mount namespace\n"
+          )
+          if replacement not in text:
+              if needle not in text:
+                  raise SystemExit("validator insertion point changed")
+              validator.write_text(text.replace(needle, replacement, 1))
+
+          test = Path("libcontainer/configs/validate/mountns_restrictions_test.go")
+          test.write_text('''package validate
+
+          import (
+          \t"testing"
+
+          \t"github.com/opencontainers/runc/libcontainer/configs"
+          )
+
+          func TestValidateReadonlyfsMountNamespaceBoundary(t *testing.T) {
+          \ttests := []struct {
+          \t\tname       string
+          \t\tnamespaces configs.Namespaces
+          \t\twantErr    bool
+          \t}{
+          \t\t{
+          \t\t\tname:    "omitted mount namespace",
+          \t\t\twantErr: true,
+          \t\t},
+          \t\t{
+          \t\t\tname: "private mount namespace",
+          \t\t\tnamespaces: configs.Namespaces{
+          \t\t\t\t{Type: configs.NEWNS},
+          \t\t\t},
+          \t\t\twantErr: false,
+          \t\t},
+          \t\t{
+          \t\t\tname: "joined mount namespace",
+          \t\t\tnamespaces: configs.Namespaces{
+          \t\t\t\t{Type: configs.NEWNS, Path: "/proc/self/ns/mnt"},
+          \t\t\t},
+          \t\t\twantErr: false,
+          \t\t},
+          \t}
+
+          \tfor _, test := range tests {
+          \t\tt.Run(test.name, func(t *testing.T) {
+          \t\t\tconfig := &configs.Config{
+          \t\t\t\tRootfs:     "/var",
+          \t\t\t\tReadonlyfs: true,
+          \t\t\t\tNamespaces: test.namespaces,
+          \t\t\t}
+
+          \t\t\terr := Validate(config)
+          \t\t\tif test.wantErr && err == nil {
+          \t\t\t\tt.Fatal("expected validation error, got nil")
+          \t\t\t}
+          \t\t\tif !test.wantErr && err != nil {
+          \t\t\t\tt.Fatalf("expected validation to succeed, got %v", err)
+          \t\t\t}
+          \t\t})
+          \t}
+          }
+          '''.replace("          ", ""))
+          PY
+
+          gofmt -w \
+            libcontainer/configs/validate/validator.go \
+            libcontainer/configs/validate/mountns_restrictions_test.go
+          git diff --check
+          go test ./libcontainer/configs/validate \
+            -run TestValidateReadonlyfsMountNamespaceBoundary \
+            -count=1
+
+      - name: Commit direct source candidate
+        run: |
+          if git diff --quiet; then
+            echo "Candidate already materialized."
+            exit 0
+          fi
+          git config user.name "linux-fieldwork-bot"
+          git config user.email "linux-fieldwork@example.invalid"
+          git add \
+            libcontainer/configs/validate/validator.go \
+            libcontainer/configs/validate/mountns_restrictions_test.go
+          git commit -m "libct: reject readonly rootfs without mount namespace"
+          git push origin HEAD:fieldwork/readonlyfs-validator-candidate
