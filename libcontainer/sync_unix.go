@@ -72,7 +72,7 @@ func (s *syncSocket) ReadPacket() ([]byte, error) {
 	var n, oobn, flags int
 	for {
 		n, oobn, flags, _, err = unix.Recvmsg(int(s.f.Fd()), buf, oob, unix.MSG_CMSG_CLOEXEC)
-		if err != unix.EINTR {
+		if !errors.Is(err, unix.EINTR) {
 			break
 		}
 	}
@@ -167,7 +167,7 @@ func pollSyncReadable(fd, timeoutMs int) (bool, error) {
 	fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 	for {
 		n, err := unix.Poll(fds, timeoutMs)
-		if err == unix.EINTR {
+		if errors.Is(err, unix.EINTR) {
 			continue
 		}
 		if err != nil {
