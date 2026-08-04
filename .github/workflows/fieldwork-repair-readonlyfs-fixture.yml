@@ -65,3 +65,5 @@ jobs:
           git add libcontainer/specconv/spec_linux_test.go
           git commit -m "test: make no-Linux-section root mode explicit"
           git push origin HEAD:fieldwork/readonlyfs-validator-candidate
+
+# Triggered after workflow registration so the branch-scoped repair executes.
