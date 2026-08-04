@@ -24,7 +24,7 @@ function configure_late_write_action() {
 
 function runc_with_hang_guard() {
 	setup_runc_cmdline
-	run timeout --foreground --signal=KILL --kill-after=1s 15s "${RUNC_CMDLINE[@]}" "$@"
+	run timeout --foreground --signal=TERM --kill-after=1s 15s "${RUNC_CMDLINE[@]}" "$@"
 
 	echo "runc $* (status=$status)" >&2
 	echo "$output" >&2
@@ -33,9 +33,11 @@ function runc_with_hang_guard() {
 function check_failed_run_cleanup() {
 	local id="$1"
 
-	# timeout(1) returns 124 when it had to break a hang.
+	# timeout(1) normally returns 124 when it breaks a hang. Some signal and
+	# platform combinations expose the final SIGKILL as 137. Reject both.
 	[ "$status" -ne 0 ]
 	[ "$status" -ne 124 ]
+	[ "$status" -ne 137 ]
 
 	runc state "$id"
 	[ "$status" -ne 0 ]
