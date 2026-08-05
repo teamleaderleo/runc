@@ -1,0 +1,89 @@
+name: Fieldwork readonly rootfs mount namespace validation
+
+on:
+  push:
+    branches:
+      - fieldwork/readonlyfs-requires-mountns
+  pull_request:
+    branches:
+      - main
+    paths:
+      - libcontainer/configs/validate/validator.go
+      - libcontainer/configs/validate/validator_test.go
+      - .fieldwork/apply-readonlyfs-mountns.py
+      - .github/workflows/fieldwork-readonlyfs-mountns.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BASE_SHA: ca10066999e198274b588be199950fccedec9b5f
+
+jobs:
+  verify-and-promote:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out controlled branch without persisted credentials
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up repository Go version
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Apply fail-closed candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          python3 .fieldwork/apply-readonlyfs-mountns.py
+          gofmt -w \
+            libcontainer/configs/validate/validator.go \
+            libcontainer/configs/validate/validator_test.go
+          test "$(git diff --name-only | sort)" = $'libcontainer/configs/validate/validator.go\nlibcontainer/configs/validate/validator_test.go'
+          git diff --check
+
+      - name: Run focused validator boundary
+        run: |
+          go test ./libcontainer/configs/validate \
+            -run 'TestValidate(Readonlyfs|Security)' \
+            -count=1
+
+      - name: Run complete validator package
+        run: go test ./libcontainer/configs/validate -count=1
+
+      - name: Run source formatting and vet controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(gofmt -l libcontainer/configs/validate/validator.go libcontainer/configs/validate/validator_test.go)"
+          go vet ./libcontainer/configs/validate
+          git diff --check
+
+      - name: Promote reviewed source-only candidate
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            libcontainer/configs/validate/validator.go \
+            libcontainer/configs/validate/validator_test.go
+          git rm \
+            .fieldwork/apply-readonlyfs-mountns.py \
+            .github/workflows/fieldwork-readonlyfs-mountns.yml
+          git commit -m 'validate: require mount namespace for read-only rootfs'
+          test "$(git diff --name-only "$BASE_SHA" HEAD | sort)" = $'libcontainer/configs/validate/validator.go\nlibcontainer/configs/validate/validator_test.go'
+          git diff --check "$BASE_SHA" HEAD
+          auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" \
+            push origin HEAD:"$GITHUB_REF_NAME"
