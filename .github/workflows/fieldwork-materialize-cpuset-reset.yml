@@ -1,0 +1,111 @@
+name: Materialize Fieldwork CPU reset boundary
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fieldwork-materialize-cpuset-reset.yml
+      - .github/fieldwork-cpuset-reset-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: >-
+      github.repository == 'teamleaderleo/runc' &&
+      github.head_ref == 'fieldwork/cpuset-max-reset-candidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact candidate branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fieldwork/cpuset-max-reset-candidate
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up declared Go toolchain
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Materialize source and focused guard
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("libcontainer/process_linux.go")
+          text = path.read_text()
+          marker = '''// tryResetCPUAffinity tries to reset the CPU affinity of the process
+'''
+          helper = '''func allCPUsMask() unix.CPUSetDynamic {
+\tbuf := unix.NewCPUSet(configs.MaxCPU + 1)
+\tbuf.Fill()
+\treturn buf
+}
+
+'''
+          if helper not in text:
+              if text.count(marker) != 1:
+                  raise SystemExit("CPU reset helper insertion point changed")
+              text = text.replace(marker, helper + marker, 1)
+
+          old = '''\tbuf := unix.NewCPUSet(configs.MaxCPU)
+\tbuf.Fill()
+'''
+          new = '''\tbuf := allCPUsMask()
+'''
+          if new not in text:
+              if text.count(old) != 1:
+                  raise SystemExit("CPU reset allocation block changed")
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+
+          cat >libcontainer/process_linux_cpuset_test.go <<'EOF'
+          package libcontainer
+
+          import (
+              "testing"
+
+              "github.com/opencontainers/runc/libcontainer/configs"
+          )
+
+          func TestAllCPUsMaskIncludesConfiguredMaximum(t *testing.T) {
+              mask := allCPUsMask()
+              for _, cpu := range []int{0, configs.MaxCPU - 1, configs.MaxCPU} {
+                  if !mask.IsSet(cpu) {
+                      t.Errorf("reset mask does not include accepted CPU ID %d", cpu)
+                  }
+              }
+              if mask.IsSet(configs.MaxCPU + 1) {
+                  t.Errorf("reset mask unexpectedly includes CPU ID %d above the accepted maximum", configs.MaxCPU+1)
+              }
+          }
+          EOF
+
+          gofmt -w libcontainer/process_linux.go libcontainer/process_linux_cpuset_test.go
+          git diff --check
+          go test ./libcontainer -run '^TestAllCPUsMaskIncludesConfiguredMaximum$'
+
+      - name: Remove temporary carrier and commit product fence
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -f \
+            .github/workflows/fieldwork-materialize-cpuset-reset.yml \
+            .github/fieldwork-cpuset-reset-trigger
+          git config user.name "linux-fieldwork-bot"
+          git config user.email "linux-fieldwork@example.invalid"
+          git add -A
+          changed="$(git diff --cached --name-only)"
+          printf '%s\n' "$changed"
+          test "$changed" = "libcontainer/process_linux.go
+          libcontainer/process_linux_cpuset_test.go"
+          git commit -m "libct: include accepted maximum in CPU reset mask"
+          git push origin HEAD:fieldwork/cpuset-max-reset-candidate
