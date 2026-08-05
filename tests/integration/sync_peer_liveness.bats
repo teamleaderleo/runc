@@ -12,6 +12,9 @@ function teardown() {
 
 function configure_late_write_action() {
 	local action="$1"
+	# The jq program must remain single-quoted so jq, not the shell, expands
+	# $action from --arg.
+	# shellcheck disable=SC2016
 	update_config --arg action "$action" '
 		.process.args = ["/bin/true"]
 		| .process.noNewPrivileges = true
