@@ -172,6 +172,36 @@ func TestValidateSecurityWithoutNEWNS(t *testing.T) {
 	}
 }
 
+func TestValidateReadonlyfsWithoutNEWNS(t *testing.T) {
+	config := &configs.Config{
+		Rootfs:     "/var",
+		Readonlyfs: true,
+	}
+
+	err := Validate(config)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	const expected = "unable to make rootfs read-only without a MNT namespace"
+	if err.Error() != expected {
+		t.Fatalf("unexpected validation error: got %q, want %q", err, expected)
+	}
+}
+
+func TestValidateReadonlyfsWithNEWNS(t *testing.T) {
+	config := &configs.Config{
+		Rootfs:     "/var",
+		Readonlyfs: true,
+		Namespaces: configs.Namespaces{
+			{Type: configs.NEWNS},
+		},
+	}
+
+	if err := Validate(config); err != nil {
+		t.Fatalf("expected validation to succeed, got %v", err)
+	}
+}
+
 func TestValidateUserNamespace(t *testing.T) {
 	if _, err := os.Stat("/proc/self/ns/user"); errors.Is(err, os.ErrNotExist) {
 		t.Skip("Test requires userns.")

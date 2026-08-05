@@ -128,6 +128,10 @@ func uts(config *configs.Config) error {
 }
 
 func security(config *configs.Config) error {
+	if config.Readonlyfs && !config.Namespaces.Contains(configs.NEWNS) {
+		return errors.New("unable to make rootfs read-only without a MNT namespace")
+	}
+
 	// restrict sys without mount namespace
 	if (len(config.MaskPaths) > 0 || len(config.ReadonlyPaths) > 0) &&
 		!config.Namespaces.Contains(configs.NEWNS) {
