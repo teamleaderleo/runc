@@ -6,12 +6,21 @@ on:
       - fieldwork/readonlyfs-validator-candidate
     paths:
       - .github/workflows/fieldwork-repair-readonlyfs-fixture.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fieldwork-repair-readonlyfs-fixture.yml
 
 permissions:
   contents: write
 
 jobs:
   repair-fixture:
+    if: >-
+      github.repository == 'teamleaderleo/runc' &&
+      (github.ref_name == 'fieldwork/readonlyfs-validator-candidate' ||
+       github.head_ref == 'fieldwork/readonlyfs-validator-candidate')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
