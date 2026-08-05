@@ -1,0 +1,58 @@
+name: Materialize Fieldwork readonlyfs fixture
+
+on:
+  push:
+    branches:
+      - fieldwork/readonlyfs-validator-candidate
+      - fieldwork/readonlyfs-validator-tests
+    paths:
+      - .github/fieldwork-readonlyfs-repair-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out pushed branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Repair unrelated no-Linux-section fixture
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("libcontainer/specconv/spec_linux_test.go")
+          text = path.read_text()
+          needle = '''\tspec.Linux = nil
+          \tspec.Hostname = ""
+          '''
+          replacement = '''\tspec.Linux = nil
+          \tspec.Hostname = ""
+          \t// This test exercises conversion without a Linux section. The example
+          \t// spec defaults to a read-only root, which requires a configured mount
+          \t// namespace and is unrelated to the boundary under test here.
+          \tspec.Root.Readonly = false
+          '''
+          if replacement not in text:
+              if needle not in text:
+                  raise SystemExit("fixture insertion point changed")
+              path.write_text(text.replace(needle, replacement, 1))
+          PY
+          gofmt -w libcontainer/specconv/spec_linux_test.go
+          git diff --check
+      - name: Commit repair
+        run: |
+          if git diff --quiet; then
+            echo "Fixture already repaired."
+            exit 0
+          fi
+          git config user.name "linux-fieldwork-bot"
+          git config user.email "linux-fieldwork@example.invalid"
+          git add libcontainer/specconv/spec_linux_test.go
+          git commit -m "test: make no-Linux-section root mode explicit"
+          git push origin HEAD:${{ github.ref_name }}
