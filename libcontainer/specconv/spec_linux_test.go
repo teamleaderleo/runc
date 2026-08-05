@@ -566,6 +566,10 @@ func TestSpecconvNoLinuxSection(t *testing.T) {
 	spec.Root.Path = "/"
 	spec.Linux = nil
 	spec.Hostname = ""
+	// This test exercises conversion without a Linux section. The example
+	// spec defaults to a read-only root, which requires a configured mount
+	// namespace and is unrelated to the boundary under test here.
+	spec.Root.Readonly = false
 
 	opts := &CreateOpts{
 		CgroupName: "ContainerID",
