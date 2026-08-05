@@ -17,6 +17,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: fieldwork-readonlyfs-mountns-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   BASE_SHA: ca10066999e198274b588be199950fccedec9b5f
 
