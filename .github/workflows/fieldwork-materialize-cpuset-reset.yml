@@ -1,6 +1,12 @@
 name: Materialize Fieldwork CPU reset boundary
 
 on:
+  push:
+    branches:
+      - fieldwork/cpuset-max-reset-candidate
+    paths:
+      - .github/workflows/fieldwork-materialize-cpuset-reset.yml
+      - .github/fieldwork-cpuset-reset-trigger
   pull_request:
     branches:
       - main
@@ -15,7 +21,8 @@ jobs:
   materialize:
     if: >-
       github.repository == 'teamleaderleo/runc' &&
-      github.head_ref == 'fieldwork/cpuset-max-reset-candidate'
+      (github.ref_name == 'fieldwork/cpuset-max-reset-candidate' ||
+       github.head_ref == 'fieldwork/cpuset-max-reset-candidate')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -44,22 +51,22 @@ jobs:
           marker = '''// tryResetCPUAffinity tries to reset the CPU affinity of the process
 '''
           helper = '''func allCPUsMask() unix.CPUSetDynamic {
-\tbuf := unix.NewCPUSet(configs.MaxCPU + 1)
-\tbuf.Fill()
-\treturn buf
-}
+          \tbuf := unix.NewCPUSet(configs.MaxCPU + 1)
+          \tbuf.Fill()
+          \treturn buf
+          }
 
-'''
+          '''
           if helper not in text:
               if text.count(marker) != 1:
                   raise SystemExit("CPU reset helper insertion point changed")
               text = text.replace(marker, helper + marker, 1)
 
           old = '''\tbuf := unix.NewCPUSet(configs.MaxCPU)
-\tbuf.Fill()
-'''
+          \tbuf.Fill()
+          '''
           new = '''\tbuf := allCPUsMask()
-'''
+          '''
           if new not in text:
               if text.count(old) != 1:
                   raise SystemExit("CPU reset allocation block changed")
