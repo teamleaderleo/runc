@@ -4,11 +4,118 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"os"
+	"strconv"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+func TestNotifySocketRunReadyOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload string
+	}{
+		{name: "ready first", payload: "READY=1\nSTATUS=ok"},
+		{name: "ready second", payload: "STATUS=warming\nREADY=1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			hostAddr := net.UnixAddr{Name: dir + "/host.sock", Net: "unixgram"}
+			host, err := net.ListenUnixgram("unixgram", &hostAddr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer host.Close()
+
+			notifyAddr := net.UnixAddr{Name: dir + "/notify.sock", Net: "unixgram"}
+			notify, err := net.ListenUnixgram("unixgram", &notifyAddr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer notify.Close()
+
+			s := &notifySocket{socket: notify, host: hostAddr.Name}
+			runChan := make(chan error, 1)
+			go func() {
+				runChan <- s.run(os.Getpid())
+			}()
+
+			sender, err := net.DialUnix("unixgram", nil, &notifyAddr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sender.Close()
+
+			if _, err := sender.Write([]byte(tc.payload)); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := host.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			expectRead(t, host, "READY=1\n")
+			expectRead(t, host, "MAINPID="+strconv.Itoa(os.Getpid())+"\n")
+			if err := host.SetReadDeadline(time.Time{}); err != nil {
+				t.Fatal(err)
+			}
+			expectBarrier(t, host, runChan)
+		})
+	}
+}
+
+func TestNotifySocketRunIgnoresDatagramWithoutReady(t *testing.T) {
+	dir := t.TempDir()
+	hostAddr := net.UnixAddr{Name: dir + "/host.sock", Net: "unixgram"}
+	host, err := net.ListenUnixgram("unixgram", &hostAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer host.Close()
+
+	notifyAddr := net.UnixAddr{Name: dir + "/notify.sock", Net: "unixgram"}
+	notify, err := net.ListenUnixgram("unixgram", &notifyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer notify.Close()
+
+	s := &notifySocket{socket: notify, host: hostAddr.Name}
+	runChan := make(chan error, 1)
+	go func() {
+		runChan <- s.run(-1)
+	}()
+
+	sender, err := net.DialUnix("unixgram", nil, &notifyAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+
+	if _, err := sender.Write([]byte("STATUS=warming\nERRNO=0")); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-runChan:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("notifySocket.run did not exit after watched PID disappeared")
+	}
+
+	if err := host.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	var buf [1024]byte
+	if n, err := host.Read(buf[:]); err == nil {
+		t.Fatalf("unexpected host notification: %q", buf[:n])
+	} else if nerr, ok := err.(net.Error); !ok || !nerr.Timeout() {
+		t.Fatal(err)
+	}
+}
 
 // TestNotifyHost tests how runc reports container readiness to the host (usually systemd).
 func TestNotifyHost(t *testing.T) {
