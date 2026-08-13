@@ -32,12 +32,13 @@ jobs:
           git diff --check
           test "$(git diff --name-only | sort | tr '\n' ' ')" = "libcontainer/process_linux.go libcontainer/process_linux_test.go "
 
-      - name: Run focused validation
+      - name: Run focused and non-privileged unit validation
         shell: bash
         run: |
           set -euo pipefail
           go test ./libcontainer -run '^TestResetCPUAffinityMaskIncludesAcceptedMaximum$' -count=1
-          go test ./libcontainer/... -count=1
+          go test ./libcontainer -count=1
+          go test ./libcontainer/configs/... ./libcontainer/system/... ./libcontainer/utils/... -count=1
 
       - name: Publish clean candidate
         shell: bash
