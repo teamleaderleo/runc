@@ -28,6 +28,7 @@ jobs:
           test "$(git rev-parse HEAD)" = 7495faeac77318158e6d5faece1b0b0d53e6ced4
           python3 /tmp/materialize.py
           gofmt -w libcontainer/process_linux.go libcontainer/process_linux_test.go
+          git add -N libcontainer/process_linux_test.go
           git diff --check
           test "$(git diff --name-only | sort | tr '\n' ' ')" = "libcontainer/process_linux.go libcontainer/process_linux_test.go "
 
