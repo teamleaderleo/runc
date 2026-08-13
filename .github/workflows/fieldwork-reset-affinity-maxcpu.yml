@@ -1,0 +1,49 @@
+name: Fieldwork reset-affinity max CPU candidate
+
+on:
+  push:
+    branches:
+      - materialize/reset-affinity-maxcpu
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out materializer
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore exact source and apply candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp fieldwork_materialize_reset_affinity.py /tmp/materialize.py
+          git checkout --detach 7495faeac77318158e6d5faece1b0b0d53e6ced4
+          test "$(git rev-parse HEAD)" = 7495faeac77318158e6d5faece1b0b0d53e6ced4
+          python3 /tmp/materialize.py
+          gofmt -w libcontainer/process_linux.go libcontainer/process_linux_test.go
+          git diff --check
+          test "$(git diff --name-only | sort | tr '\n' ' ')" = "libcontainer/process_linux.go libcontainer/process_linux_test.go "
+
+      - name: Run focused validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./libcontainer -run '^TestResetCPUAffinityMaskIncludesAcceptedMaximum$' -count=1
+          go test ./libcontainer/... -count=1
+
+      - name: Publish clean candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Leo'
+          git config user.email 'cheerleaderleo@outlook.com'
+          git add libcontainer/process_linux.go libcontainer/process_linux_test.go
+          git commit -m 'libcontainer: include maximum CPU in reset affinity' -m 'Build the reset-affinity mask with an exclusive bound one past the highest CPU ID accepted by the configuration parser. Add a package-level regression that proves the reset mask includes the accepted maximum without requiring a machine with that CPU ID.' -m 'Signed-off-by: Leo <cheerleaderleo@outlook.com>'
+          git push origin HEAD:refs/heads/candidate/reset-affinity-maxcpu --force
