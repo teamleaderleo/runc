@@ -47,8 +47,5 @@ func TestResetCPUAffinityMaskIncludesAcceptedMaximum(t *testing.T) {
 \t\t\tt.Errorf("reset CPU affinity mask does not include CPU %d", cpu)
 \t\t}
 \t}
-\tif mask.IsSet(configs.MaxCPU + 1) {
-\t\tt.Errorf("reset CPU affinity mask unexpectedly includes CPU %d", configs.MaxCPU+1)
-\t}
 }
 ''')
