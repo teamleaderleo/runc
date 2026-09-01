@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net"
 	"os/exec"
 	"strconv"
@@ -106,8 +107,11 @@ func TestNotifySocketReadyOrder(t *testing.T) {
 				var buf [128]byte
 				if _, err := hostServer.Read(buf[:]); err == nil {
 					t.Fatal("unexpected host notification without READY field")
-				} else if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
-					t.Fatalf("unexpected host socket read error: %v", err)
+				} else {
+					var netErr net.Error
+					if !errors.As(err, &netErr) || !netErr.Timeout() {
+						t.Fatalf("unexpected host socket read error: %v", err)
+					}
 				}
 				return
 			}
